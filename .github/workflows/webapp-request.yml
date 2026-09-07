@@ -31,30 +31,47 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Issue Formの本文から「### Label」の次の行を取得する
+          # Issue Formの本文から「### Label」に対応する値を取得する
+          # ・GitHubのIssue本文はCRLFのため行末のCRを除去する
+          # ・見出しと値の間には空行が入るため、最初の非空行を値として扱う
           get_field() {
             local label="$1"
 
             printf '%s\n' "$ISSUE_BODY" |
               awk -v target="### ${label}" '
-                {
-                  line=$0
-                  gsub(/\r/, "", line)
-                  gsub(/^\\/, "", line)
-                  gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
-                }
+                { line = $0; sub(/\r$/, "", line) }
 
-                line == target {
-                  if (getline > 0) {
-                    gsub(/\r/, "", $0)
-                    gsub(/^\\/, "", $0)
-                    gsub(/^[[:space:]]+|[[:space:]]+$/, "", $0)
-                    print
-                  }
+                found == 1 {
+                  # 値が入力されないまま次の見出しに到達した場合は空を返す
+                  if (line ~ /^###[[:space:]]/) { exit }
+
+                  gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
+
+                  # 見出し直後の空行は読み飛ばす
+                  if (line == "") { next }
+
+                  # 未入力（任意項目）の場合は空を返す
+                  if (line == "_No response_") { exit }
+
+                  print line
                   exit
                 }
+
+                line == target { found = 1 }
               '
           }
+
+          # ------------------------------------------------------
+          # Request marker
+          # ------------------------------------------------------
+          if ! printf '%s\n' "$ISSUE_BODY" |
+               tr -d '\r' |
+               grep -Fqx '<!-- AZURE_WEBAPP_REQUEST_FORM_V1 -->'
+          then
+            echo "::error::Invalid Azure Web App Issue Form."
+            echo "::error::Request marker was not found."
+            exit 1
+          fi
 
           # ------------------------------------------------------
           # Read fields
