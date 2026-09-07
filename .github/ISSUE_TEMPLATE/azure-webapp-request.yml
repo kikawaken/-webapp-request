@@ -1,154 +1,385 @@
 name: Azure Web App Request
-description: Azure Web App の作成申請を行います
-title: "Azure Web App Request"
 
-body:
-  - type: markdown
-    attributes:
-      value: |
-        ## Azure Web App 作成申請
+on:
+  issues:
+    types:
+      - opened
 
-        このフォームから申請内容を入力してください。
-        申請後、Private Repository 側で自動 Precheck が実行されます。
+permissions:
+  contents: read
+  issues: read
 
-        **Azure リソースの作成は、Private Repository 側で `/approve` が実行された後に行われます。**
+jobs:
+  create-private-issue:
+    name: Create Private Approval Issue
+    runs-on: ubuntu-latest
 
-  - type: input
-    id: resource_group
-    attributes:
-      label: Resource Group
-      description: 作成先の Resource Group 名
-      placeholder: "rg-webapp-dev"
-    validations:
-      required: true
+    if: >
+      github.event.issue.pull_request == null &&
+      startsWith(github.event.issue.title, 'Azure Web App Request')
 
-  - type: dropdown
-    id: location
-    attributes:
-      label: Azure Region
-      description: Azure リージョン
-      options:
-        - japaneast
-        - japanwest
-        - eastus
-        - eastus2
-        - westus2
-        - southeastasia
-    validations:
-      required: true
+    steps:
 
-  - type: input
-    id: app_service_plan
-    attributes:
-      label: App Service Plan
-      description: 使用する App Service Plan 名
-      placeholder: "asp-webapp-dev"
-    validations:
-      required: true
+      # ==========================================================
+      # Parse Issue Form
+      # ==========================================================
+      - name: Parse Issue Form
+        id: parse
+        shell: bash
+        env:
+          ISSUE_BODY: ${{ github.event.issue.body }}
+        run: |
+          set -euo pipefail
 
-  - type: input
-    id: webapp_name
-    attributes:
-      label: Web App Name
-      description: Azure Web App 名（小文字・数字・ハイフン、60文字以内）
-      placeholder: "my-webapp-dev"
-    validations:
-      required: true
+          # Issue Formの本文から「### Label」の次の空白行をスキップして値を取得する
+          get_field() {
+            local label="$1"
 
-  - type: dropdown
-    id: runtime
-    attributes:
-      label: Runtime
-      options:
-        - "Python latest"
-        - "Python 3.13"
-        - "Python 3.12"
-        - "Node.js latest"
-        - "Node.js 22"
-        - "Node.js 20"
-        - ".NET latest"
-        - ".NET 8.0"
-        - "Java latest"
-        - "Java 21"
-        - "Java 17"
-    validations:
-      required: true
+            printf '%s\n' "$ISSUE_BODY" |
+              awk -v target="### ${label}" '
+                {
+                  line=$0
+                  gsub(/\r/, "", line)
+                  gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
+                  gsub(/^\\/, "", line)
+                }
 
-  - type: dropdown
-    id: os
-    attributes:
-      label: Operating System
-      options:
-        - Linux
-        - Windows
-    validations:
-      required: true
+                line == target {
+                  while (getline > 0) {
+                    value=$0
+                    gsub(/\r/, "", value)
+                    gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+                    gsub(/^\\/, "", value)
 
-  - type: dropdown
-    id: sku
-    attributes:
-      label: App Service Plan SKU
-      options:
-        - B1
-        - B2
-        - S1
-        - P1v3
-    validations:
-      required: true
+                    if (value != "") {
+                      print value
+                      exit
+                    }
+                  }
+                }
+              '
+          }
 
-  - type: dropdown
-    id: environment
-    attributes:
-      label: Environment
-      options:
-        - DEV
-        - TEST
-        - PROD
-    validations:
-      required: true
+          # ------------------------------------------------------
+          # Read fields
+          # ------------------------------------------------------
+          RESOURCE_GROUP="$(get_field "Resource Group")"
+          LOCATION="$(get_field "Azure Region")"
+          APP_SERVICE_PLAN="$(get_field "App Service Plan")"
+          WEBAPP_NAME="$(get_field "Web App Name")"
+          RUNTIME="$(get_field "Runtime")"
+          OS="$(get_field "Operating System")"
+          SKU="$(get_field "App Service Plan SKU")"
+          ENVIRONMENT="$(get_field "Environment")"
+          HTTPS_ONLY="$(get_field "HTTPS Only")"
+          MANAGED_IDENTITY="$(get_field "Managed Identity")"
+          PUBLIC_NETWORK_ACCESS="$(get_field "Public Network Access")"
+          APPLICATION_INSIGHTS="$(get_field "Application Insights")"
 
-  - type: dropdown
-    id: https_only
-    attributes:
-      label: HTTPS Only
-      options:
-        - "true"
-        - "false"
-    validations:
-      required: true
+          # ------------------------------------------------------
+          # Required check
+          # ------------------------------------------------------
+          for VALUE_NAME in \
+            RESOURCE_GROUP \
+            LOCATION \
+            APP_SERVICE_PLAN \
+            WEBAPP_NAME \
+            RUNTIME \
+            OS \
+            SKU \
+            ENVIRONMENT \
+            HTTPS_ONLY \
+            MANAGED_IDENTITY \
+            PUBLIC_NETWORK_ACCESS \
+            APPLICATION_INSIGHTS
+          do
+            if [ -z "${!VALUE_NAME}" ]; then
+              echo "::error::Missing Issue Form field: ${VALUE_NAME}"
+              exit 1
+            fi
+          done
 
-  - type: dropdown
-    id: managed_identity
-    attributes:
-      label: Managed Identity
-      options:
-        - "true"
-        - "false"
-    validations:
-      required: true
+          # ------------------------------------------------------
+          # Web App name validation
+          # ------------------------------------------------------
+          if [[ ! "$WEBAPP_NAME" =~ ^[a-z0-9-]+$ ]]; then
+            echo "::error::Web App Name must contain only lowercase letters, numbers and hyphens."
+            exit 1
+          fi
 
-  - type: dropdown
-    id: public_network_access
-    attributes:
-      label: Public Network Access
-      options:
-        - "true"
-        - "false"
-    validations:
-      required: true
+          if [ "${#WEBAPP_NAME}" -gt 60 ]; then
+            echo "::error::Web App Name must be 60 characters or less."
+            exit 1
+          fi
 
-  - type: dropdown
-    id: application_insights
-    attributes:
-      label: Application Insights
-      options:
-        - "true"
-        - "false"
-    validations:
-      required: true
+          # ------------------------------------------------------
+          # Resource name validation
+          # ------------------------------------------------------
+          if [[ ! "$RESOURCE_GROUP" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+            echo "::error::Resource Group name contains invalid characters."
+            exit 1
+          fi
 
-  - type: markdown
-    attributes:
-      value: |
-        ---
-        送信後、Issue の内容を変更しないでください。
+          if [[ ! "$APP_SERVICE_PLAN" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+            echo "::error::App Service Plan name contains invalid characters."
+            exit 1
+          fi
+
+          # ------------------------------------------------------
+          # Allowed values
+          # ------------------------------------------------------
+          case "$LOCATION" in
+            japaneast|japanwest|eastus|eastus2|westus2|southeastasia)
+              ;;
+            *)
+              echo "::error::Unsupported Azure Region: $LOCATION"
+              exit 1
+              ;;
+          esac
+
+          case "$RUNTIME" in
+            "Python latest"|"Python 3.13"|"Python 3.12"|
+            "Node.js latest"|"Node.js 22"|"Node.js 20"|
+            ".NET latest"|".NET 8.0"|
+            "Java latest"|"Java 21"|"Java 17")
+              ;;
+            *)
+              echo "::error::Unsupported Runtime: $RUNTIME"
+              exit 1
+              ;;
+          esac
+
+          case "$OS" in
+            Linux|Windows)
+              ;;
+            *)
+              echo "::error::Unsupported Operating System: $OS"
+              exit 1
+              ;;
+          esac
+
+          case "$SKU" in
+            B1|B2|S1|P1v3)
+              ;;
+            *)
+              echo "::error::Unsupported SKU: $SKU"
+              exit 1
+              ;;
+          esac
+
+          case "$ENVIRONMENT" in
+            DEV|TEST|PROD)
+              ;;
+            *)
+              echo "::error::Unsupported Environment: $ENVIRONMENT"
+              exit 1
+              ;;
+          esac
+
+          for VALUE_NAME in \
+            HTTPS_ONLY \
+            MANAGED_IDENTITY \
+            PUBLIC_NETWORK_ACCESS \
+            APPLICATION_INSIGHTS
+          do
+            case "${!VALUE_NAME}" in
+              true|false)
+                ;;
+              *)
+                echo "::error::${VALUE_NAME} must be true or false."
+                exit 1
+                ;;
+            esac
+          done
+
+          # ------------------------------------------------------
+          # Runtime / OS validation
+          # ------------------------------------------------------
+          if [[ "$RUNTIME" == Python* && "$OS" != "Linux" ]]; then
+            echo "::error::Python runtime requires Linux."
+            exit 1
+          fi
+
+          # ------------------------------------------------------
+          # PROD policy
+          # ------------------------------------------------------
+          if [ "$ENVIRONMENT" = "PROD" ]; then
+            if [ "$HTTPS_ONLY" != "true" ]; then
+              echo "::error::PROD requires HTTPS Only=true."
+              exit 1
+            fi
+
+            if [ "$MANAGED_IDENTITY" != "true" ]; then
+              echo "::error::PROD requires Managed Identity=true."
+              exit 1
+            fi
+          fi
+
+          # ------------------------------------------------------
+          # Outputs
+          # ------------------------------------------------------
+          {
+            echo "resource_group=$RESOURCE_GROUP"
+            echo "location=$LOCATION"
+            echo "app_service_plan=$APP_SERVICE_PLAN"
+            echo "webapp_name=$WEBAPP_NAME"
+            echo "runtime=$RUNTIME"
+            echo "os=$OS"
+            echo "sku=$SKU"
+            echo "environment=$ENVIRONMENT"
+            echo "https_only=$HTTPS_ONLY"
+            echo "managed_identity=$MANAGED_IDENTITY"
+            echo "public_network_access=$PUBLIC_NETWORK_ACCESS"
+            echo "application_insights=$APPLICATION_INSIGHTS"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Issue Form validation succeeded."
+
+      # ==========================================================
+      # Show request
+      # ==========================================================
+      - name: Show Request
+        env:
+          RG: ${{ steps.parse.outputs.resource_group }}
+          LOCATION: ${{ steps.parse.outputs.location }}
+          PLAN: ${{ steps.parse.outputs.app_service_plan }}
+          WEBAPP: ${{ steps.parse.outputs.webapp_name }}
+          RUNTIME: ${{ steps.parse.outputs.runtime }}
+          OS: ${{ steps.parse.outputs.os }}
+          SKU: ${{ steps.parse.outputs.sku }}
+          ENVIRONMENT: ${{ steps.parse.outputs.environment }}
+          HTTPS: ${{ steps.parse.outputs.https_only }}
+          MI: ${{ steps.parse.outputs.managed_identity }}
+          PNA: ${{ steps.parse.outputs.public_network_access }}
+          AI: ${{ steps.parse.outputs.application_insights }}
+        shell: bash
+        run: |
+          echo "=========================================="
+          echo "Azure Web App Request"
+          echo "=========================================="
+          echo "Requester             : ${{ github.actor }}"
+          echo "Public Repository     : ${{ github.repository }}"
+          echo "Public Issue          : #${{ github.event.issue.number }}"
+          echo "Resource Group        : $RG"
+          echo "Location              : $LOCATION"
+          echo "App Service Plan      : $PLAN"
+          echo "Web App               : $WEBAPP"
+          echo "Runtime               : $RUNTIME"
+          echo "OS                    : $OS"
+          echo "SKU                   : $SKU"
+          echo "Environment           : $ENVIRONMENT"
+          echo "HTTPS Only            : $HTTPS"
+          echo "Managed Identity      : $MI"
+          echo "Public Network Access : $PNA"
+          echo "Application Insights  : $AI"
+          echo "=========================================="
+
+      # ==========================================================
+      # Build request payload
+      # ==========================================================
+      - name: Build Private Request
+        env:
+          REQUESTER: ${{ github.actor }}
+          PUBLIC_REPOSITORY: ${{ github.repository }}
+          PUBLIC_RUN_ID: ${{ github.run_id }}
+          PUBLIC_ISSUE_NUMBER: ${{ github.event.issue.number }}
+          RG: ${{ steps.parse.outputs.resource_group }}
+          LOCATION: ${{ steps.parse.outputs.location }}
+          PLAN: ${{ steps.parse.outputs.app_service_plan }}
+          WEBAPP: ${{ steps.parse.outputs.webapp_name }}
+          RUNTIME: ${{ steps.parse.outputs.runtime }}
+          OS: ${{ steps.parse.outputs.os }}
+          SKU: ${{ steps.parse.outputs.sku }}
+          ENVIRONMENT: ${{ steps.parse.outputs.environment }}
+          HTTPS: ${{ steps.parse.outputs.https_only }}
+          MI: ${{ steps.parse.outputs.managed_identity }}
+          PNA: ${{ steps.parse.outputs.public_network_access }}
+          AI: ${{ steps.parse.outputs.application_insights }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          CANONICAL_REQUEST="$REQUESTER|$PUBLIC_REPOSITORY|$PUBLIC_RUN_ID|$RG|$LOCATION|$PLAN|$WEBAPP|$RUNTIME|$OS|$SKU|$ENVIRONMENT|$HTTPS|$MI|$PNA|$AI"
+
+          REQUEST_HASH=$(
+            printf '%s' "$CANONICAL_REQUEST" |
+              sha256sum |
+              awk '{print $1}'
+          )
+
+          {
+            echo "## Azure Web App Provisioning Request"
+            echo ""
+            echo "このIssueはPublic RepositoryのIssue Formから自動作成された申請です。"
+            echo ""
+            echo "**Azure操作はPrivate Repository側でPrecheck後、\`/approve\` が実行された場合のみ行われます。**"
+            echo ""
+            echo "### Request Information"
+            echo ""
+            echo "| Parameter | Value |"
+            echo "|---|---|"
+            echo "| Requester | $REQUESTER |"
+            echo "| Public Repository | $PUBLIC_REPOSITORY |"
+            echo "| Public Issue | #$PUBLIC_ISSUE_NUMBER |"
+            echo "| Resource Group | $RG |"
+            echo "| Location | $LOCATION |"
+            echo "| App Service Plan | $PLAN |"
+            echo "| Web App | $WEBAPP |"
+            echo "| Runtime | $RUNTIME |"
+            echo "| OS | $OS |"
+            echo "| SKU | $SKU |"
+            echo "| Environment | $ENVIRONMENT |"
+            echo "| HTTPS Only | $HTTPS |"
+            echo "| Managed Identity | $MI |"
+            echo "| Public Network Access | $PNA |"
+            echo "| Application Insights | $AI |"
+            echo ""
+            echo "### Approval"
+            echo ""
+            echo "PrecheckがPASSの場合に承認者が \`/approve\` をコメントしてください。"
+            echo ""
+            echo "却下する場合は \`/reject\` をコメントしてください。"
+            echo ""
+            echo "<!-- AZURE_WEBAPP_REQUEST_V1 -->"
+            echo "REQUESTER=$REQUESTER"
+            echo "PUBLIC_REPOSITORY=$PUBLIC_REPOSITORY"
+            echo "PUBLIC_RUN_ID=$PUBLIC_RUN_ID"
+            echo "RESOURCE_GROUP=$RG"
+            echo "LOCATION=$LOCATION"
+            echo "APP_SERVICE_PLAN=$PLAN"
+            echo "WEBAPP_NAME=$WEBAPP"
+            echo "RUNTIME=$RUNTIME"
+            echo "OS=$OS"
+            echo "SKU=$SKU"
+            echo "ENVIRONMENT=$ENVIRONMENT"
+            echo "HTTPS_ONLY=$HTTPS"
+            echo "MANAGED_IDENTITY=$MANAGED_IDENTITY"
+            echo "PUBLIC_NETWORK_ACCESS=$PNA"
+            echo "APPLICATION_INSIGHTS=$AI"
+            echo "REQUEST_HASH=$REQUEST_HASH"
+          } > private-request.md
+
+          echo "Request hash: $REQUEST_HASH"
+
+      # ==========================================================
+      # Create Issue in PRIVATE repository
+      # ==========================================================
+      - name: Create Private Approval Issue
+        env:
+          GH_TOKEN: ${{ secrets.PRIVATE_REPO_ISSUE_TOKEN }}
+          WEBAPP: ${{ steps.parse.outputs.webapp_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::PRIVATE_REPO_ISSUE_TOKEN is not configured as a Repository Secret."
+            exit 1
+          fi
+
+          gh issue create \
+            --repo kikawaken/create-webapp \
+            --title "Azure Web App Approval - ${WEBAPP} - Public Issue #${{ github.event.issue.number }}" \
+            --body-file private-request.md
+
+          echo "Private approval Issue created successfully."
