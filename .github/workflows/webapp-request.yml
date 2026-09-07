@@ -19,123 +19,261 @@ jobs:
       startsWith(github.event.issue.title, 'Azure Web App Request')
 
     steps:
+
+      # ==========================================================
+      # Parse Issue Form
+      # ==========================================================
       - name: Parse Issue Form
         id: parse
-        shell: python
+        shell: bash
         env:
           ISSUE_BODY: ${{ github.event.issue.body }}
         run: |
-          import os
-          import re
-          import sys
+          set -euo pipefail
 
-          body = os.environ.get("ISSUE_BODY", "")
-          marker = "<!-- AZURE_WEBAPP_REQUEST_FORM_V1 -->"
+          # Issue Formの本文から「### Label」の次の行を取得する
+          get_field() {
+            local label="$1"
 
-          if marker not in body:
-              print("::error::Invalid Azure Web App Issue Form.")
-              print("::error::Request marker was not found.")
-              sys.exit(1)
-
-          fields = {}
-          pattern = re.compile(
-              r"^### (?P<label>.+?)\r?\n\r?\n(?P<value>[^\r\n]*)",
-              re.MULTILINE
-          )
-
-          for match in pattern.finditer(body):
-              fields[match.group("label").strip()] = match.group("value").strip()
-
-          mapping = {
-              "Resource Group": "resource_group",
-              "Azure Region": "location",
-              "App Service Plan": "app_service_plan",
-              "Web App Name": "webapp_name",
-              "Runtime": "runtime",
-              "Operating System": "os",
-              "App Service Plan SKU": "sku",
-              "Environment": "environment",
-              "HTTPS Only": "https_only",
-              "Managed Identity": "managed_identity",
-              "Public Network Access": "public_network_access",
-              "Application Insights": "application_insights",
+            printf '%s\n' "$ISSUE_BODY" |
+              awk -v target="### ${label}" '
+                $0 == target {
+                  getline
+                  gsub(/\r/, "", $0)
+                  print
+                  exit
+                }
+              '
           }
 
-          values = {}
-          for label, key in mapping.items():
-              value = fields.get(label, "")
-              if not value:
-                  print(f"::error::Missing Issue Form field: {label}")
-                  sys.exit(1)
-              values[key] = value
+          # ------------------------------------------------------
+          # Request marker
+          # ------------------------------------------------------
+          if ! printf '%s\n' "$ISSUE_BODY" |
+               grep -Fqx '<!-- AZURE_WEBAPP_REQUEST_FORM_V1 -->'
+          then
+            echo "::error::Invalid Azure Web App Issue Form."
+            echo "::error::Request marker was not found."
+            exit 1
+          fi
 
-          errors = []
+          # ------------------------------------------------------
+          # Read fields
+          # ------------------------------------------------------
+          RESOURCE_GROUP="$(get_field "Resource Group")"
+          LOCATION="$(get_field "Azure Region")"
+          APP_SERVICE_PLAN="$(get_field "App Service Plan")"
+          WEBAPP_NAME="$(get_field "Web App Name")"
+          RUNTIME="$(get_field "Runtime")"
+          OS="$(get_field "Operating System")"
+          SKU="$(get_field "App Service Plan SKU")"
+          ENVIRONMENT="$(get_field "Environment")"
+          HTTPS_ONLY="$(get_field "HTTPS Only")"
+          MANAGED_IDENTITY="$(get_field "Managed Identity")"
+          PUBLIC_NETWORK_ACCESS="$(get_field "Public Network Access")"
+          APPLICATION_INSIGHTS="$(get_field "Application Insights")"
 
-          if not re.fullmatch(r"[a-z0-9-]+", values["webapp_name"]):
-              errors.append("Web App Name must contain only lowercase letters, numbers and hyphens.")
+          # ------------------------------------------------------
+          # Required check
+          # ------------------------------------------------------
+          for VALUE_NAME in \
+            RESOURCE_GROUP \
+            LOCATION \
+            APP_SERVICE_PLAN \
+            WEBAPP_NAME \
+            RUNTIME \
+            OS \
+            SKU \
+            ENVIRONMENT \
+            HTTPS_ONLY \
+            MANAGED_IDENTITY \
+            PUBLIC_NETWORK_ACCESS \
+            APPLICATION_INSIGHTS
+          do
+            if [ -z "${!VALUE_NAME}" ]; then
+              echo "::error::Missing Issue Form field: ${VALUE_NAME}"
+              exit 1
+            fi
+          done
 
-          if len(values["webapp_name"]) > 60:
-              errors.append("Web App Name must be 60 characters or less.")
+          # ------------------------------------------------------
+          # Web App name validation
+          # ------------------------------------------------------
+          if [[ ! "$WEBAPP_NAME" =~ ^[a-z0-9-]+$ ]]; then
+            echo "::error::Web App Name must contain only lowercase letters, numbers and hyphens."
+            exit 1
+          fi
 
-          if not re.fullmatch(r"[A-Za-z0-9._-]+", values["resource_group"]):
-              errors.append("Resource Group name contains invalid characters.")
+          if [ "${#WEBAPP_NAME}" -gt 60 ]; then
+            echo "::error::Web App Name must be 60 characters or less."
+            exit 1
+          fi
 
-          if not re.fullmatch(r"[A-Za-z0-9._-]+", values["app_service_plan"]):
-              errors.append("App Service Plan name contains invalid characters.")
+          # ------------------------------------------------------
+          # Resource name validation
+          # ------------------------------------------------------
+          if [[ ! "$RESOURCE_GROUP" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+            echo "::error::Resource Group name contains invalid characters."
+            exit 1
+          fi
 
-          if values["location"] not in {
-              "japaneast", "japanwest", "eastus",
-              "eastus2", "westus2", "southeastasia"
-          }:
-              errors.append(f"Unsupported Azure Region: {values['location']}")
+          if [[ ! "$APP_SERVICE_PLAN" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+            echo "::error::App Service Plan name contains invalid characters."
+            exit 1
+          fi
 
-          if values["runtime"] not in {
-              "Python latest", "Python 3.13", "Python 3.12",
-              "Node.js latest", "Node.js 22", "Node.js 20",
-              ".NET latest", ".NET 8.0",
-              "Java latest", "Java 21", "Java 17"
-          }:
-              errors.append(f"Unsupported Runtime: {values['runtime']}")
+          # ------------------------------------------------------
+          # Allowed values
+          # ------------------------------------------------------
+          case "$LOCATION" in
+            japaneast|japanwest|eastus|eastus2|westus2|southeastasia)
+              ;;
+            *)
+              echo "::error::Unsupported Azure Region: $LOCATION"
+              exit 1
+              ;;
+          esac
 
-          if values["os"] not in {"Linux", "Windows"}:
-              errors.append(f"Unsupported Operating System: {values['os']}")
+          case "$RUNTIME" in
+            "Python latest"|"Python 3.13"|"Python 3.12"|
+            "Node.js latest"|"Node.js 22"|"Node.js 20"|
+            ".NET latest"|".NET 8.0"|
+            "Java latest"|"Java 21"|"Java 17")
+              ;;
+            *)
+              echo "::error::Unsupported Runtime: $RUNTIME"
+              exit 1
+              ;;
+          esac
 
-          if values["sku"] not in {"B1", "B2", "S1", "P1v3"}:
-              errors.append(f"Unsupported SKU: {values['sku']}")
+          case "$OS" in
+            Linux|Windows)
+              ;;
+            *)
+              echo "::error::Unsupported Operating System: $OS"
+              exit 1
+              ;;
+          esac
 
-          if values["environment"] not in {"DEV", "TEST", "PROD"}:
-              errors.append(f"Unsupported Environment: {values['environment']}")
+          case "$SKU" in
+            B1|B2|S1|P1v3)
+              ;;
+            *)
+              echo "::error::Unsupported SKU: $SKU"
+              exit 1
+              ;;
+          esac
 
-          for key in (
-              "https_only",
-              "managed_identity",
-              "public_network_access",
-              "application_insights",
-          ):
-              if values[key] not in {"true", "false"}:
-                  errors.append(f"{key} must be true or false.")
+          case "$ENVIRONMENT" in
+            DEV|TEST|PROD)
+              ;;
+            *)
+              echo "::error::Unsupported Environment: $ENVIRONMENT"
+              exit 1
+              ;;
+          esac
 
-          if values["runtime"].startswith("Python") and values["os"] != "Linux":
-              errors.append("Python runtime requires Linux.")
+          for VALUE_NAME in \
+            HTTPS_ONLY \
+            MANAGED_IDENTITY \
+            PUBLIC_NETWORK_ACCESS \
+            APPLICATION_INSIGHTS
+          do
+            case "${!VALUE_NAME}" in
+              true|false)
+                ;;
+              *)
+                echo "::error::${VALUE_NAME} must be true or false."
+                exit 1
+                ;;
+            esac
+          done
 
-          if values["environment"] == "PROD":
-              if values["https_only"] != "true":
-                  errors.append("PROD requires HTTPS Only=true.")
-              if values["managed_identity"] != "true":
-                  errors.append("PROD requires Managed Identity=true.")
+          # ------------------------------------------------------
+          # Runtime / OS validation
+          # ------------------------------------------------------
+          if [[ "$RUNTIME" == Python* && "$OS" != "Linux" ]]; then
+            echo "::error::Python runtime requires Linux."
+            exit 1
+          fi
 
-          if errors:
-              print("::error::Issue Form validation failed.")
-              for error in errors:
-                  print(f"::error::{error}")
-              sys.exit(1)
+          # ------------------------------------------------------
+          # PROD policy
+          # ------------------------------------------------------
+          if [ "$ENVIRONMENT" = "PROD" ]; then
+            if [ "$HTTPS_ONLY" != "true" ]; then
+              echo "::error::PROD requires HTTPS Only=true."
+              exit 1
+            fi
 
-          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
-              for key, value in values.items():
-                  fh.write(f"{key}={value.replace('%', '%25').replace(chr(10), '%0A').replace(chr(13), '%0D')}\n")
+            if [ "$MANAGED_IDENTITY" != "true" ]; then
+              echo "::error::PROD requires Managed Identity=true."
+              exit 1
+            fi
+          fi
 
-          print("Issue Form validation succeeded.")
+          # ------------------------------------------------------
+          # Outputs
+          # ------------------------------------------------------
+          {
+            echo "resource_group=$RESOURCE_GROUP"
+            echo "location=$LOCATION"
+            echo "app_service_plan=$APP_SERVICE_PLAN"
+            echo "webapp_name=$WEBAPP_NAME"
+            echo "runtime=$RUNTIME"
+            echo "os=$OS"
+            echo "sku=$SKU"
+            echo "environment=$ENVIRONMENT"
+            echo "https_only=$HTTPS_ONLY"
+            echo "managed_identity=$MANAGED_IDENTITY"
+            echo "public_network_access=$PUBLIC_NETWORK_ACCESS"
+            echo "application_insights=$APPLICATION_INSIGHTS"
+          } >> "$GITHUB_OUTPUT"
 
+          echo "Issue Form validation succeeded."
+
+      # ==========================================================
+      # Show request
+      # ==========================================================
+      - name: Show Request
+        env:
+          RG: ${{ steps.parse.outputs.resource_group }}
+          LOCATION: ${{ steps.parse.outputs.location }}
+          PLAN: ${{ steps.parse.outputs.app_service_plan }}
+          WEBAPP: ${{ steps.parse.outputs.webapp_name }}
+          RUNTIME: ${{ steps.parse.outputs.runtime }}
+          OS: ${{ steps.parse.outputs.os }}
+          SKU: ${{ steps.parse.outputs.sku }}
+          ENVIRONMENT: ${{ steps.parse.outputs.environment }}
+          HTTPS: ${{ steps.parse.outputs.https_only }}
+          MI: ${{ steps.parse.outputs.managed_identity }}
+          PNA: ${{ steps.parse.outputs.public_network_access }}
+          AI: ${{ steps.parse.outputs.application_insights }}
+        shell: bash
+        run: |
+          echo "=========================================="
+          echo "Azure Web App Request"
+          echo "=========================================="
+          echo "Requester             : ${{ github.actor }}"
+          echo "Public Repository     : ${{ github.repository }}"
+          echo "Public Issue          : #${{ github.event.issue.number }}"
+          echo "Resource Group        : $RG"
+          echo "Location              : $LOCATION"
+          echo "App Service Plan      : $PLAN"
+          echo "Web App               : $WEBAPP"
+          echo "Runtime               : $RUNTIME"
+          echo "OS                    : $OS"
+          echo "SKU                   : $SKU"
+          echo "Environment           : $ENVIRONMENT"
+          echo "HTTPS Only            : $HTTPS"
+          echo "Managed Identity      : $MI"
+          echo "Public Network Access : $PNA"
+          echo "Application Insights  : $AI"
+          echo "=========================================="
+
+      # ==========================================================
+      # Build request payload
+      # ==========================================================
       - name: Build Private Request
         env:
           REQUESTER: ${{ github.actor }}
@@ -154,98 +292,75 @@ jobs:
           MI: ${{ steps.parse.outputs.managed_identity }}
           PNA: ${{ steps.parse.outputs.public_network_access }}
           AI: ${{ steps.parse.outputs.application_insights }}
-        shell: python
+        shell: bash
         run: |
-          import hashlib
-          import os
-          from pathlib import Path
+          set -euo pipefail
 
-          values = {
-              "REQUESTER": os.environ["REQUESTER"],
-              "PUBLIC_REPOSITORY": os.environ["PUBLIC_REPOSITORY"],
-              "PUBLIC_RUN_ID": os.environ["PUBLIC_RUN_ID"],
-              "RESOURCE_GROUP": os.environ["RG"],
-              "LOCATION": os.environ["LOCATION"],
-              "APP_SERVICE_PLAN": os.environ["PLAN"],
-              "WEBAPP_NAME": os.environ["WEBAPP"],
-              "RUNTIME": os.environ["RUNTIME"],
-              "OS": os.environ["OS"],
-              "SKU": os.environ["SKU"],
-              "ENVIRONMENT": os.environ["ENVIRONMENT"],
-              "HTTPS_ONLY": os.environ["HTTPS"],
-              "MANAGED_IDENTITY": os.environ["MI"],
-              "PUBLIC_NETWORK_ACCESS": os.environ["PNA"],
-              "APPLICATION_INSIGHTS": os.environ["AI"],
-          }
+          CANONICAL_REQUEST="$REQUESTER|$PUBLIC_REPOSITORY|$PUBLIC_RUN_ID|$RG|$LOCATION|$PLAN|$WEBAPP|$RUNTIME|$OS|$SKU|$ENVIRONMENT|$HTTPS|$MI|$PNA|$AI"
 
-          keys = [
-              "REQUESTER", "PUBLIC_REPOSITORY", "PUBLIC_RUN_ID",
-              "RESOURCE_GROUP", "LOCATION", "APP_SERVICE_PLAN",
-              "WEBAPP_NAME", "RUNTIME", "OS", "SKU", "ENVIRONMENT",
-              "HTTPS_ONLY", "MANAGED_IDENTITY",
-              "PUBLIC_NETWORK_ACCESS", "APPLICATION_INSIGHTS",
-          ]
-
-          canonical = "|".join(values[k] for k in keys)
-          request_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-
-          lines = [
-              "## Azure Web App Provisioning Request",
-              "",
-              "このIssueはPublic RepositoryのIssue Formから自動作成された申請です。",
-              "",
-              "**Azure操作はPrivate Repository側でPrecheck後、`/approve` が実行された場合のみ行われます。**",
-              "",
-              "### Request Information",
-              "",
-              "| Parameter | Value |",
-              "|---|---|",
-          ]
-
-          rows = [
-              ("Requester", values["REQUESTER"]),
-              ("Public Repository", values["PUBLIC_REPOSITORY"]),
-              ("Public Issue", f"#{os.environ['PUBLIC_ISSUE_NUMBER']}"),
-              ("Resource Group", values["RESOURCE_GROUP"]),
-              ("Location", values["LOCATION"]),
-              ("App Service Plan", values["APP_SERVICE_PLAN"]),
-              ("Web App", values["WEBAPP_NAME"]),
-              ("Runtime", values["RUNTIME"]),
-              ("OS", values["OS"]),
-              ("SKU", values["SKU"]),
-              ("Environment", values["ENVIRONMENT"]),
-              ("HTTPS Only", values["HTTPS_ONLY"]),
-              ("Managed Identity", values["MANAGED_IDENTITY"]),
-              ("Public Network Access", values["PUBLIC_NETWORK_ACCESS"]),
-              ("Application Insights", values["APPLICATION_INSIGHTS"]),
-          ]
-
-          for label, value in rows:
-              lines.append(f"| {label} | {value.replace('|', '\\|').replace(chr(10), ' ')} |")
-
-          lines.extend([
-              "",
-              "### Approval",
-              "",
-              "PrecheckがPASSの場合に承認者が `/approve` をコメントしてください。",
-              "",
-              "却下する場合は `/reject` をコメントしてください。",
-              "",
-              "<!-- AZURE_WEBAPP_REQUEST_V1 -->",
-          ])
-
-          for key in keys:
-              lines.append(f"{key}={values[key]}")
-
-          lines.append(f"REQUEST_HASH={request_hash}")
-
-          Path("private-request.md").write_text(
-              "\n".join(lines) + "\n",
-              encoding="utf-8"
+          REQUEST_HASH=$(
+            printf '%s' "$CANONICAL_REQUEST" |
+              sha256sum |
+              awk '{print $1}'
           )
 
-          print(f"Request hash: {request_hash}")
+          {
+            echo "## Azure Web App Provisioning Request"
+            echo ""
+            echo "このIssueはPublic RepositoryのIssue Formから自動作成された申請です。"
+            echo ""
+            echo "**Azure操作はPrivate Repository側でPrecheck後、\`/approve\` が実行された場合のみ行われます。**"
+            echo ""
+            echo "### Request Information"
+            echo ""
+            echo "| Parameter | Value |"
+            echo "|---|---|"
+            echo "| Requester | $REQUESTER |"
+            echo "| Public Repository | $PUBLIC_REPOSITORY |"
+            echo "| Public Issue | #$PUBLIC_ISSUE_NUMBER |"
+            echo "| Resource Group | $RG |"
+            echo "| Location | $LOCATION |"
+            echo "| App Service Plan | $PLAN |"
+            echo "| Web App | $WEBAPP |"
+            echo "| Runtime | $RUNTIME |"
+            echo "| OS | $OS |"
+            echo "| SKU | $SKU |"
+            echo "| Environment | $ENVIRONMENT |"
+            echo "| HTTPS Only | $HTTPS |"
+            echo "| Managed Identity | $MI |"
+            echo "| Public Network Access | $PNA |"
+            echo "| Application Insights | $AI |"
+            echo ""
+            echo "### Approval"
+            echo ""
+            echo "PrecheckがPASSの場合に承認者が \`/approve\` をコメントしてください。"
+            echo ""
+            echo "却下する場合は \`/reject\` をコメントしてください。"
+            echo ""
+            echo "<!-- AZURE_WEBAPP_REQUEST_V1 -->"
+            echo "REQUESTER=$REQUESTER"
+            echo "PUBLIC_REPOSITORY=$PUBLIC_REPOSITORY"
+            echo "PUBLIC_RUN_ID=$PUBLIC_RUN_ID"
+            echo "RESOURCE_GROUP=$RG"
+            echo "LOCATION=$LOCATION"
+            echo "APP_SERVICE_PLAN=$PLAN"
+            echo "WEBAPP_NAME=$WEBAPP"
+            echo "RUNTIME=$RUNTIME"
+            echo "OS=$OS"
+            echo "SKU=$SKU"
+            echo "ENVIRONMENT=$ENVIRONMENT"
+            echo "HTTPS_ONLY=$HTTPS"
+            echo "MANAGED_IDENTITY=$MI"
+            echo "PUBLIC_NETWORK_ACCESS=$PNA"
+            echo "APPLICATION_INSIGHTS=$AI"
+            echo "REQUEST_HASH=$REQUEST_HASH"
+          } > private-request.md
 
+          echo "Request hash: $REQUEST_HASH"
+
+      # ==========================================================
+      # Create Issue in PRIVATE repository
+      # ==========================================================
       - name: Create Private Approval Issue
         env:
           GH_TOKEN: ${{ secrets.PRIVATE_REPO_ISSUE_TOKEN }}
@@ -259,6 +374,9 @@ jobs:
             exit 1
           fi
 
-          gh issue create             --repo kikawaken/create-webapp             --title "Azure Web App Approval - ${WEBAPP} - Public Issue #${{ github.event.issue.number }}"             --body-file private-request.md
+          gh issue create \
+            --repo kikawaken/create-webapp \
+            --title "Azure Web App Approval - ${WEBAPP} - Public Issue #${{ github.event.issue.number }}" \
+            --body-file private-request.md
 
           echo "Private approval Issue created successfully."
