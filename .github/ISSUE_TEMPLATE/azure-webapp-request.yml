@@ -1,6 +1,7 @@
 name: Azure Web App Request
 description: Azure Web App の作成申請を行います
 title: "Azure Web App Request"
+
 body:
   - type: markdown
     attributes:
@@ -151,5 +152,3 @@ body:
       value: |
         ---
         送信後、Issue の内容を変更しないでください。
-
-        <!-- AZURE_WEBAPP_REQUEST_FORM_V1 -->
