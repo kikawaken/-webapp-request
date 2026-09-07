@@ -1,0 +1,374 @@
+name: Azure Web App Request
+
+on:
+  workflow_dispatch:
+    inputs:
+      resource_group:
+        description: "Resource Group name"
+        required: true
+        type: string
+
+      location:
+        description: "Azure region"
+        required: true
+        type: choice
+        options:
+          - japaneast
+          - japanwest
+          - eastus
+          - eastus2
+          - westus2
+          - southeastasia
+
+      app_service_plan:
+        description: "App Service Plan name"
+        required: true
+        type: string
+
+      webapp_name:
+        description: "Web App name"
+        required: true
+        type: string
+
+      runtime:
+        description: "Runtime"
+        required: true
+        type: choice
+        options:
+          - "Python latest"
+          - "Python 3.13"
+          - "Python 3.12"
+          - "Node.js latest"
+          - "Node.js 22"
+          - "Node.js 20"
+          - ".NET latest"
+          - ".NET 8.0"
+          - "Java latest"
+          - "Java 21"
+          - "Java 17"
+
+      os:
+        description: "Operating System"
+        required: true
+        type: choice
+        options:
+          - Linux
+          - Windows
+
+      sku:
+        description: "App Service Plan SKU"
+        required: true
+        type: choice
+        options:
+          - B1
+          - B2
+          - S1
+          - P1v3
+
+      environment:
+        description: "Environment"
+        required: true
+        type: choice
+        options:
+          - DEV
+          - TEST
+          - PROD
+
+      https_only:
+        description: "HTTPS Only"
+        required: true
+        type: choice
+        options:
+          - "true"
+          - "false"
+
+      managed_identity:
+        description: "Managed Identity"
+        required: true
+        type: choice
+        options:
+          - "true"
+          - "false"
+
+      public_network_access:
+        description: "Public Network Access"
+        required: true
+        type: choice
+        options:
+          - "true"
+          - "false"
+
+      application_insights:
+        description: "Application Insights"
+        required: true
+        type: choice
+        options:
+          - "true"
+          - "false"
+
+
+permissions:
+  contents: read
+  issues: write
+
+
+jobs:
+
+  # ============================================================
+  # 1. Validate request
+  # ============================================================
+  validate:
+    name: Validate Request
+    runs-on: ubuntu-latest
+
+    outputs:
+      result: ${{ steps.validate.outputs.result }}
+      errors: ${{ steps.validate.outputs.errors }}
+
+    steps:
+
+      - name: Show request
+        run: |
+          echo "======================================"
+          echo "Azure Web App Request"
+          echo "======================================"
+          echo "Requested by          : ${{ github.actor }}"
+          echo "Resource Group        : ${{ inputs.resource_group }}"
+          echo "Location              : ${{ inputs.location }}"
+          echo "App Service Plan      : ${{ inputs.app_service_plan }}"
+          echo "Web App                : ${{ inputs.webapp_name }}"
+          echo "Runtime                : ${{ inputs.runtime }}"
+          echo "OS                     : ${{ inputs.os }}"
+          echo "SKU                    : ${{ inputs.sku }}"
+          echo "Environment            : ${{ inputs.environment }}"
+          echo "HTTPS Only             : ${{ inputs.https_only }}"
+          echo "Managed Identity       : ${{ inputs.managed_identity }}"
+          echo "Public Network Access : ${{ inputs.public_network_access }}"
+          echo "Application Insights  : ${{ inputs.application_insights }}"
+          echo "======================================"
+
+      - name: Validate parameters
+        id: validate
+        shell: bash
+        run: |
+          set +e
+
+          ERRORS=""
+
+          add_error() {
+            ERRORS="${ERRORS}
+          - $1"
+          }
+
+          WEBAPP="${{ inputs.webapp_name }}"
+          RG="${{ inputs.resource_group }}"
+          PLAN="${{ inputs.app_service_plan }}"
+          RUNTIME="${{ inputs.runtime }}"
+          OS="${{ inputs.os }}"
+          ENVIRONMENT="${{ inputs.environment }}"
+          HTTPS="${{ inputs.https_only }}"
+          MI="${{ inputs.managed_identity }}"
+
+          # --------------------------------------------------
+          # Web App name
+          # --------------------------------------------------
+          if [[ ! "$WEBAPP" =~ ^[a-z0-9-]+$ ]]; then
+            add_error "Web App name must contain only lowercase letters, numbers and hyphens."
+          fi
+
+          if [ ${#WEBAPP} -gt 60 ]; then
+            add_error "Web App name must be 60 characters or less."
+          fi
+
+          # --------------------------------------------------
+          # Resource Group
+          # --------------------------------------------------
+          if [[ ! "$RG" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+            add_error "Resource Group name contains invalid characters."
+          fi
+
+          # --------------------------------------------------
+          # App Service Plan
+          # --------------------------------------------------
+          if [[ ! "$PLAN" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+            add_error "App Service Plan name contains invalid characters."
+          fi
+
+          # --------------------------------------------------
+          # Python requires Linux
+          # --------------------------------------------------
+          if [[ "$RUNTIME" == Python* && "$OS" != "Linux" ]]; then
+            add_error "Python runtime requires Linux."
+          fi
+
+          # --------------------------------------------------
+          # PROD requirements
+          # --------------------------------------------------
+          if [[ "$ENVIRONMENT" == "PROD" ]]; then
+
+            if [[ "$HTTPS" != "true" ]]; then
+              add_error "PROD requires HTTPS Only = true."
+            fi
+
+            if [[ "$MI" != "true" ]]; then
+              add_error "PROD requires Managed Identity = true."
+            fi
+
+          fi
+
+          # --------------------------------------------------
+          # Result
+          # --------------------------------------------------
+          if [ -n "$ERRORS" ]; then
+            {
+              echo "result=NG"
+              echo "errors<<EOF"
+              echo "$ERRORS"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+
+            exit 1
+          fi
+
+          {
+            echo "result=OK"
+            echo "errors="
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Validation succeeded."
+
+
+  # ============================================================
+  # 2. Return validation error
+  # ============================================================
+  validation-error:
+    name: Return Validation Error
+    runs-on: ubuntu-latest
+
+    needs:
+      - validate
+
+    if: always() && needs.validate.result == 'failure'
+
+    steps:
+
+      - name: Create error issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+
+          cat > issue.md <<EOF
+          ## Azure Web App Request Error
+
+          **申請者**
+
+          @${{ github.actor }}
+
+          **Workflow Run**
+
+          https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          ### 入力内容
+
+          | Parameter | Value |
+          |---|---|
+          | Resource Group | ${{ inputs.resource_group }} |
+          | Location | ${{ inputs.location }} |
+          | App Service Plan | ${{ inputs.app_service_plan }} |
+          | Web App | ${{ inputs.webapp_name }} |
+          | Runtime | ${{ inputs.runtime }} |
+          | OS | ${{ inputs.os }} |
+          | SKU | ${{ inputs.sku }} |
+          | Environment | ${{ inputs.environment }} |
+          | HTTPS Only | ${{ inputs.https_only }} |
+          | Managed Identity | ${{ inputs.managed_identity }} |
+          | Public Network Access | ${{ inputs.public_network_access }} |
+          | Application Insights | ${{ inputs.application_insights }} |
+
+          ### Validation
+
+          **NG**
+
+          入力パラメータに問題があります。
+
+          Workflowの実行ログを確認してください。
+
+          この申請は承認処理には進みません。
+          EOF
+
+          gh issue create \
+            --repo "${{ github.repository }}" \
+            --title "Azure Web App Request Error - ${{ inputs.webapp_name }}" \
+            --body-file issue.md
+
+
+  # ============================================================
+  # 3. Create request issue
+  # ============================================================
+  create-request:
+    name: Create Request
+    runs-on: ubuntu-latest
+
+    needs:
+      - validate
+
+    if: needs.validate.result == 'success'
+
+    steps:
+
+      - name: Create request issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+
+          cat > issue.md <<EOF
+          ## Azure Web App Provisioning Request
+
+          **申請者**
+
+          @${{ github.actor }}
+
+          **Request Run ID**
+
+          ${{ github.run_id }}
+
+          **Workflow**
+
+          https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          ---
+
+          ### Request Parameters
+
+          | Parameter | Value |
+          |---|---|
+          | Resource Group | ${{ inputs.resource_group }} |
+          | Location | ${{ inputs.location }} |
+          | App Service Plan | ${{ inputs.app_service_plan }} |
+          | Web App | ${{ inputs.webapp_name }} |
+          | Runtime | ${{ inputs.runtime }} |
+          | OS | ${{ inputs.os }} |
+          | SKU | ${{ inputs.sku }} |
+          | Environment | ${{ inputs.environment }} |
+          | HTTPS Only | ${{ inputs.https_only }} |
+          | Managed Identity | ${{ inputs.managed_identity }} |
+          | Public Network Access | ${{ inputs.public_network_access }} |
+          | Application Insights | ${{ inputs.application_insights }} |
+
+          ---
+
+          ### Status
+
+          **REQUESTED**
+
+          この申請はPrivate Repository側で確認・承認されます。
+
+          このIssueへの \`/approve\` や \`/reject\` は無効です。
+
+          承認操作はPrivate Repository側で行ってください。
+          EOF
+
+          gh issue create \
+            --repo "${{ github.repository }}" \
+            --title "Azure Web App Request - ${{ inputs.webapp_name }} - Run ${{ github.run_id }}" \
+            --body-file issue.md
