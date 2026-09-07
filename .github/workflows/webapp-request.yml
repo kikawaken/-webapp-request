@@ -157,9 +157,9 @@ jobs:
           esac
 
           case "$RUNTIME" in
-            "Python latest"|"Python 3.13"|"Python 3.12"|
-            "Node.js latest"|"Node.js 22"|"Node.js 20"|
-            ".NET latest"|".NET 8.0"|
+            "Python latest"|"Python 3.13"|"Python 3.12"| \
+            "Node.js latest"|"Node.js 22"|"Node.js 20"| \
+            ".NET latest"|".NET 8.0"| \
             "Java latest"|"Java 21"|"Java 17")
               ;;
             *)
