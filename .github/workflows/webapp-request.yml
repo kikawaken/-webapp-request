@@ -47,17 +47,6 @@ jobs:
           }
 
           # ------------------------------------------------------
-          # Request marker
-          # ------------------------------------------------------
-          if ! printf '%s\n' "$ISSUE_BODY" |
-               grep -Fqx '<!-- AZURE_WEBAPP_REQUEST_FORM_V1 -->'
-          then
-            echo "::error::Invalid Azure Web App Issue Form."
-            echo "::error::Request marker was not found."
-            exit 1
-          fi
-
-          # ------------------------------------------------------
           # Read fields
           # ------------------------------------------------------
           RESOURCE_GROUP="$(get_field "Resource Group")"
