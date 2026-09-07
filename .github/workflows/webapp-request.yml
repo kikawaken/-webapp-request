@@ -15,12 +15,28 @@ jobs:
     runs-on: ubuntu-latest
 
     # Issue Form の type: markdown は Issue 本文に出力されないため、
-    # 申請の識別は Issue Form が自動付与するラベルで行う
+    # 申請の識別はラベル、またはタイトルの接頭辞で行う
     if: >
       github.event.issue.pull_request == null &&
-      contains(github.event.issue.labels.*.name, 'azure-webapp-request')
+      (
+        contains(github.event.issue.labels.*.name, 'azure-webapp-request') ||
+        startsWith(github.event.issue.title, 'Azure Web App Request')
+      )
 
     steps:
+
+      # ==========================================================
+      # Debug: 判定材料をログに出す
+      # ==========================================================
+      - name: Debug Trigger Context
+        env:
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_LABELS: ${{ join(github.event.issue.labels.*.name, ',') }}
+        shell: bash
+        run: |
+          echo "Issue number : #${{ github.event.issue.number }}"
+          echo "Issue title  : $ISSUE_TITLE"
+          echo "Issue labels : [$ISSUE_LABELS]"
 
       # ==========================================================
       # Parse Issue Form
