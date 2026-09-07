@@ -37,10 +37,20 @@ jobs:
 
             printf '%s\n' "$ISSUE_BODY" |
               awk -v target="### ${label}" '
-                $0 == target {
-                  getline
-                  gsub(/\r/, "", $0)
-                  print
+                {
+                  line=$0
+                  gsub(/\r/, "", line)
+                  gsub(/^\\/, "", line)
+                  gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
+                }
+
+                line == target {
+                  if (getline > 0) {
+                    gsub(/\r/, "", $0)
+                    gsub(/^\\/, "", $0)
+                    gsub(/^[[:space:]]+|[[:space:]]+$/, "", $0)
+                    print
+                  }
                   exit
                 }
               '
