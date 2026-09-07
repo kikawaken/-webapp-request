@@ -14,9 +14,11 @@ jobs:
     name: Create Private Approval Issue
     runs-on: ubuntu-latest
 
+    # Issue Form の type: markdown は Issue 本文に出力されないため、
+    # 申請の識別は Issue Form が自動付与するラベルで行う
     if: >
       github.event.issue.pull_request == null &&
-      startsWith(github.event.issue.title, 'Azure Web App Request')
+      contains(github.event.issue.labels.*.name, 'azure-webapp-request')
 
     steps:
 
@@ -60,18 +62,6 @@ jobs:
                 line == target { found = 1 }
               '
           }
-
-          # ------------------------------------------------------
-          # Request marker
-          # ------------------------------------------------------
-          if ! printf '%s\n' "$ISSUE_BODY" |
-               tr -d '\r' |
-               grep -Fqx '<!-- AZURE_WEBAPP_REQUEST_FORM_V1 -->'
-          then
-            echo "::error::Invalid Azure Web App Issue Form."
-            echo "::error::Request marker was not found."
-            exit 1
-          fi
 
           # ------------------------------------------------------
           # Read fields
