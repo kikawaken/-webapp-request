@@ -39,10 +39,7 @@ jobs:
 
           fields = {}
           pattern = re.compile(
-              r"^### (?P<label>.+?)?
-?
-(?P<value>[^
-]*)",
+              r"^### (?P<label>.+?)\r?\n\r?\n(?P<value>[^\r\n]*)",
               re.MULTILINE
           )
 
@@ -76,32 +73,36 @@ jobs:
 
           if not re.fullmatch(r"[a-z0-9-]+", values["webapp_name"]):
               errors.append("Web App Name must contain only lowercase letters, numbers and hyphens.")
+
           if len(values["webapp_name"]) > 60:
               errors.append("Web App Name must be 60 characters or less.")
+
           if not re.fullmatch(r"[A-Za-z0-9._-]+", values["resource_group"]):
               errors.append("Resource Group name contains invalid characters.")
+
           if not re.fullmatch(r"[A-Za-z0-9._-]+", values["app_service_plan"]):
               errors.append("App Service Plan name contains invalid characters.")
 
-          allowed_locations = {
+          if values["location"] not in {
               "japaneast", "japanwest", "eastus",
               "eastus2", "westus2", "southeastasia"
-          }
-          allowed_runtimes = {
+          }:
+              errors.append(f"Unsupported Azure Region: {values['location']}")
+
+          if values["runtime"] not in {
               "Python latest", "Python 3.13", "Python 3.12",
               "Node.js latest", "Node.js 22", "Node.js 20",
               ".NET latest", ".NET 8.0",
               "Java latest", "Java 21", "Java 17"
-          }
-
-          if values["location"] not in allowed_locations:
-              errors.append(f"Unsupported Azure Region: {values['location']}")
-          if values["runtime"] not in allowed_runtimes:
+          }:
               errors.append(f"Unsupported Runtime: {values['runtime']}")
+
           if values["os"] not in {"Linux", "Windows"}:
               errors.append(f"Unsupported Operating System: {values['os']}")
+
           if values["sku"] not in {"B1", "B2", "S1", "P1v3"}:
               errors.append(f"Unsupported SKU: {values['sku']}")
+
           if values["environment"] not in {"DEV", "TEST", "PROD"}:
               errors.append(f"Unsupported Environment: {values['environment']}")
 
@@ -131,45 +132,9 @@ jobs:
 
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
               for key, value in values.items():
-                  value = value.replace("%", "%25").replace("\n", "%0A").replace("\r", "%0D")
-                  fh.write(f"{key}={value}\n")
+                  fh.write(f"{key}={value.replace('%', '%25').replace(chr(10), '%0A').replace(chr(13), '%0D')}\n")
 
           print("Issue Form validation succeeded.")
-
-      - name: Show Request
-        env:
-          RG: ${{ steps.parse.outputs.resource_group }}
-          LOCATION: ${{ steps.parse.outputs.location }}
-          PLAN: ${{ steps.parse.outputs.app_service_plan }}
-          WEBAPP: ${{ steps.parse.outputs.webapp_name }}
-          RUNTIME: ${{ steps.parse.outputs.runtime }}
-          OS: ${{ steps.parse.outputs.os }}
-          SKU: ${{ steps.parse.outputs.sku }}
-          ENVIRONMENT: ${{ steps.parse.outputs.environment }}
-          HTTPS: ${{ steps.parse.outputs.https_only }}
-          MI: ${{ steps.parse.outputs.managed_identity }}
-          PNA: ${{ steps.parse.outputs.public_network_access }}
-          AI: ${{ steps.parse.outputs.application_insights }}
-        run: |
-          echo "=========================================="
-          echo "Azure Web App Request"
-          echo "=========================================="
-          echo "Requester             : ${{ github.actor }}"
-          echo "Public Repository     : ${{ github.repository }}"
-          echo "Public Issue          : #${{ github.event.issue.number }}"
-          echo "Resource Group        : $RG"
-          echo "Location              : $LOCATION"
-          echo "App Service Plan      : $PLAN"
-          echo "Web App               : $WEBAPP"
-          echo "Runtime               : $RUNTIME"
-          echo "OS                    : $OS"
-          echo "SKU                   : $SKU"
-          echo "Environment           : $ENVIRONMENT"
-          echo "HTTPS Only            : $HTTPS"
-          echo "Managed Identity      : $MI"
-          echo "Public Network Access : $PNA"
-          echo "Application Insights  : $AI"
-          echo "=========================================="
 
       - name: Build Private Request
         env:
@@ -213,7 +178,7 @@ jobs:
               "APPLICATION_INSIGHTS": os.environ["AI"],
           }
 
-          canonical_keys = [
+          keys = [
               "REQUESTER", "PUBLIC_REPOSITORY", "PUBLIC_RUN_ID",
               "RESOURCE_GROUP", "LOCATION", "APP_SERVICE_PLAN",
               "WEBAPP_NAME", "RUNTIME", "OS", "SKU", "ENVIRONMENT",
@@ -221,7 +186,7 @@ jobs:
               "PUBLIC_NETWORK_ACCESS", "APPLICATION_INSIGHTS",
           ]
 
-          canonical = "|".join(values[key] for key in canonical_keys)
+          canonical = "|".join(values[k] for k in keys)
           request_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
           lines = [
@@ -258,7 +223,7 @@ jobs:
           for label, value in rows:
               lines.append(f"| {label} | {value.replace('|', '\\|').replace(chr(10), ' ')} |")
 
-          lines += [
+          lines.extend([
               "",
               "### Approval",
               "",
@@ -267,15 +232,16 @@ jobs:
               "却下する場合は `/reject` をコメントしてください。",
               "",
               "<!-- AZURE_WEBAPP_REQUEST_V1 -->",
-          ]
+          ])
 
-          for key in canonical_keys:
+          for key in keys:
               lines.append(f"{key}={values[key]}")
+
           lines.append(f"REQUEST_HASH={request_hash}")
 
           Path("private-request.md").write_text(
               "\n".join(lines) + "\n",
-              encoding="utf-8",
+              encoding="utf-8"
           )
 
           print(f"Request hash: {request_hash}")
